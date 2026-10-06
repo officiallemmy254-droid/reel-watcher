@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "reel-watcher"
+version = "0.1.0"
+description = "Universal Reel and short-form video harvester, deconstructor, and intelligence engine"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Gwelix", email = "dev@gwelix.com" }
+]
+dependencies = [
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+reel-watcher = "reel_watcher.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v"
