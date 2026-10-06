@@ -2,6 +2,13 @@
 
 from reel_watcher.config import Config, load_config, get_status_indicator
 from reel_watcher.db import Vault, extract_shortcode
+from reel_watcher.media import (
+    detect_cuts,
+    id_from_url,
+    pick_frame_times,
+    preflight,
+    probe,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -10,5 +17,10 @@ __all__ = [
     "get_status_indicator",
     "Vault",
     "extract_shortcode",
+    "detect_cuts",
+    "id_from_url",
+    "pick_frame_times",
+    "preflight",
+    "probe",
     "__version__",
 ]
