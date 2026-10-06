@@ -38,6 +38,16 @@ from reel_watcher.signal import (
     make_contact_sheet,
     text_changed,
 )
+from reel_watcher.study import (
+    analyze_carousel_study,
+    analyze_video_study,
+    parse_comment_words,
+    parse_giveaway,
+)
+from reel_watcher.vision import (
+    VisionClient,
+    extract_json_from_text,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -70,5 +80,11 @@ __all__ = [
     "normalize_transcript_segments",
     "transcribe",
     "non_speech_energy_heuristic",
+    "VisionClient",
+    "extract_json_from_text",
+    "parse_comment_words",
+    "parse_giveaway",
+    "analyze_video_study",
+    "analyze_carousel_study",
     "__version__",
 ]
