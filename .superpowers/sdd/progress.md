@@ -11,4 +11,4 @@
 - [x] Task 8: Multi-Provider Vision & Synthesis Pipeline (`vision.py`, `study.py`) (commit 9278c09)
 - [x] Task 9: CLI Interface & Static Advice Library (`cli.py`, `advice_library.py`) (commit 1dd74fe)
 - [x] Task 10: Interactive Web Playbook Dashboard (`web/server.py`, `web/static/`) (commit 45f3dcb)
-- [ ] Task 11: Security Audit & Registry Sync
+- [x] Task 11: Security Audit & Registry Sync (Audit clean, 199/199 tests pass, registered in CAPABILITIES_REGISTRY.md)
