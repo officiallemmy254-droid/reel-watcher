@@ -8,7 +8,7 @@
 - [x] Task 5: Chrome DevTools Protocol Live Saved Reels Harvester (`browser_sync.py`) (commit 1527dcb)
 - [x] Task 6: Frame Deduplication, Contact-Sheet Generation & Signal Extraction (`signal.py`, `ocr.py`) (commit aae2b34)
 - [x] Task 7: Audio & Speech Transcription Engine (`audio.py`) (commit 0c47abd)
-- [ ] Task 8: Multi-Provider Vision & Synthesis Pipeline (`vision.py`, `study.py`)
+- [x] Task 8: Multi-Provider Vision & Synthesis Pipeline (`vision.py`, `study.py`) (commit 9278c09)
 - [ ] Task 9: CLI Interface & Static Advice Library (`cli.py`, `advice_library.py`)
 - [ ] Task 10: Interactive Web Playbook Dashboard (`web/server.py`, `web/static/`)
 - [ ] Task 11: Security Audit & Registry Sync
