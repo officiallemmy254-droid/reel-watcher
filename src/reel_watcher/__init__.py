@@ -1,5 +1,11 @@
 """Reel-Watcher: Universal short-form video harvester, deconstructor, and intelligence engine."""
 
+from reel_watcher.browser_sync import (
+    CDPSession,
+    extract_reel_codes_from_html,
+    get_active_instagram_tabs,
+    harvest_saved_reels_via_cdp,
+)
 from reel_watcher.config import Config, load_config, get_status_indicator
 from reel_watcher.db import Vault, extract_shortcode
 from reel_watcher.downloader import (
@@ -36,5 +42,9 @@ __all__ = [
     "sanitize_filename",
     "extract_urls_from_export",
     "export_to_tsv",
+    "CDPSession",
+    "extract_reel_codes_from_html",
+    "get_active_instagram_tabs",
+    "harvest_saved_reels_via_cdp",
     "__version__",
 ]
