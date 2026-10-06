@@ -24,6 +24,14 @@ from reel_watcher.media import (
     preflight,
     probe,
 )
+from reel_watcher.ocr import ocr_image
+from reel_watcher.signal import (
+    dedupe_frames,
+    dhash_bits,
+    extract_frame_jpg,
+    make_contact_sheet,
+    text_changed,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -46,5 +54,11 @@ __all__ = [
     "extract_reel_codes_from_html",
     "get_active_instagram_tabs",
     "harvest_saved_reels_via_cdp",
+    "extract_frame_jpg",
+    "dhash_bits",
+    "text_changed",
+    "dedupe_frames",
+    "make_contact_sheet",
+    "ocr_image",
     "__version__",
 ]
