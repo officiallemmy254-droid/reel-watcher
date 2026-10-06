@@ -1,5 +1,11 @@
 """Reel-Watcher: Universal short-form video harvester, deconstructor, and intelligence engine."""
 
+from reel_watcher.audio import (
+    extract_audio,
+    non_speech_energy_heuristic,
+    normalize_transcript_segments,
+    transcribe,
+)
 from reel_watcher.browser_sync import (
     CDPSession,
     extract_reel_codes_from_html,
@@ -60,5 +66,9 @@ __all__ = [
     "dedupe_frames",
     "make_contact_sheet",
     "ocr_image",
+    "extract_audio",
+    "normalize_transcript_segments",
+    "transcribe",
+    "non_speech_energy_heuristic",
     "__version__",
 ]
