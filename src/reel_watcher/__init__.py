@@ -1,5 +1,8 @@
 """Reel-Watcher: Universal short-form video harvester, deconstructor, and intelligence engine."""
 
+from typing import Any
+
+from reel_watcher.advice_library import render_advice_html
 from reel_watcher.audio import (
     extract_audio,
     non_speech_energy_heuristic,
@@ -12,7 +15,7 @@ from reel_watcher.browser_sync import (
     get_active_instagram_tabs,
     harvest_saved_reels_via_cdp,
 )
-from reel_watcher.config import Config, load_config, get_status_indicator
+from reel_watcher.config import Config, get_status_indicator, load_config
 from reel_watcher.db import Vault, extract_shortcode
 from reel_watcher.downloader import (
     download_media,
@@ -86,5 +89,17 @@ __all__ = [
     "parse_giveaway",
     "analyze_video_study",
     "analyze_carousel_study",
+    "render_advice_html",
+    "build_parser",
+    "main",
     "__version__",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Lazy import for CLI symbols to avoid runpy RuntimeWarning when invoking via python -m."""
+    if name in ("build_parser", "main"):
+        from reel_watcher.cli import build_parser, main
+
+        return {"build_parser": build_parser, "main": main}[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
