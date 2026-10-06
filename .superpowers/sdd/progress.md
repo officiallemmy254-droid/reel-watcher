@@ -1,8 +1,8 @@
 # Reel-Watcher Rebuild Progress Ledger
 
 ## Tasks
-- [ ] Task 1: Repository Scaffolding, Configuration & Environment Loader
-- [ ] Task 2: Vault State Storage & Persistence Engine (`db.py`)
+- [x] Task 1: Repository Scaffolding, Configuration & Environment Loader (commit 458233c)
+- [x] Task 2: Vault State Storage & Persistence Engine (`db.py`)
 - [ ] Task 3: Media Utilities & Scene Cut Engine (`media.py`)
 - [ ] Task 4: Downloader Engine with Chrome Cookie Injection & Export Parser (`downloader.py` & `ig_export.py`)
 - [ ] Task 5: Chrome DevTools Protocol Live Saved Reels Harvester (`browser_sync.py`)
