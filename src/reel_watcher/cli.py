@@ -318,6 +318,19 @@ def cmd_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    """Run interactive Playbook Web Dashboard and REST API."""
+    from reel_watcher.web.server import run_server
+
+    config = load_config()
+    vault = _get_vault(args, config)
+    port = getattr(args, "port", 8440)
+    host = getattr(args, "host", "127.0.0.1")
+
+    run_server(port=port, host=host, vault=vault)
+    return 0
+
+
 # ==============================================================================
 # Argument Parser Construction
 # ==============================================================================
@@ -408,6 +421,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("--db", help="Path to SQLite database.")
     p_list.add_argument("--out-root", help="Path to vault output root directory.")
     p_list.set_defaults(func=cmd_list)
+
+    # 9. serve
+    p_serve = subparsers.add_parser("serve", help="Run interactive Playbook Web Dashboard and API.")
+    p_serve.add_argument("--port", type=int, default=8440, help="Port to bind web server (default: 8440).")
+    p_serve.add_argument("--host", default="127.0.0.1", help="Host address to bind web server (default: 127.0.0.1).")
+    p_serve.add_argument("--db", help="Path to SQLite database.")
+    p_serve.add_argument("--out-root", help="Path to vault output root directory.")
+    p_serve.set_defaults(func=cmd_serve)
 
     return parser
 

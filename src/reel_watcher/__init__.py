@@ -51,6 +51,10 @@ from reel_watcher.vision import (
     VisionClient,
     extract_json_from_text,
 )
+from reel_watcher.web.server import (
+    create_app,
+    run_server,
+)
 
 __version__ = "0.1.0"
 __all__ = [
@@ -90,6 +94,8 @@ __all__ = [
     "analyze_video_study",
     "analyze_carousel_study",
     "render_advice_html",
+    "create_app",
+    "run_server",
     "build_parser",
     "main",
     "__version__",
@@ -97,9 +103,13 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    """Lazy import for CLI symbols to avoid runpy RuntimeWarning when invoking via python -m."""
+    """Lazy import for CLI and subpackage symbols to avoid runpy RuntimeWarning when invoking via python -m."""
     if name in ("build_parser", "main"):
         from reel_watcher.cli import build_parser, main
 
         return {"build_parser": build_parser, "main": main}[name]
+    if name == "web":
+        import reel_watcher.web as web
+
+        return web
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
