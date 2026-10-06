@@ -7,7 +7,7 @@
 - [x] Task 4: Downloader Engine with Chrome Cookie Injection & Export Parser (`downloader.py` & `ig_export.py`) (commit 2c45615)
 - [x] Task 5: Chrome DevTools Protocol Live Saved Reels Harvester (`browser_sync.py`) (commit 1527dcb)
 - [x] Task 6: Frame Deduplication, Contact-Sheet Generation & Signal Extraction (`signal.py`, `ocr.py`) (commit aae2b34)
-- [ ] Task 7: Audio & Speech Transcription Engine (`audio.py`)
+- [x] Task 7: Audio & Speech Transcription Engine (`audio.py`) (commit 0c47abd)
 - [ ] Task 8: Multi-Provider Vision & Synthesis Pipeline (`vision.py`, `study.py`)
 - [ ] Task 9: CLI Interface & Static Advice Library (`cli.py`, `advice_library.py`)
 - [ ] Task 10: Interactive Web Playbook Dashboard (`web/server.py`, `web/static/`)
