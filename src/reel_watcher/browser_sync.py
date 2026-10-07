@@ -147,6 +147,7 @@ class CDPSession:
             self.ws_url,
             open_timeout=self.timeout,
             close_timeout=self.timeout,
+            max_size=32 * 1024 * 1024,  # 32MB — Instagram saved pages can be very large
         )
 
     def close(self) -> None:
@@ -280,6 +281,24 @@ def harvest_saved_reels_via_cdp(
 
     try:
         with CDPSession(ws_url) as session:
+            # 0. If on the saved index without collection, navigate into all-posts collection
+            current_url = target_url
+            if current_url.rstrip("/").endswith("/saved"):
+                try:
+                    eval_url = session.evaluate("window.location.href")
+                    if eval_url:
+                        current_url = eval_url
+                except Exception:
+                    pass
+                if current_url.rstrip("/").endswith("/saved"):
+                    username = current_url.split("instagram.com/")[-1].split("/")[0]
+                    nav_url = f"https://www.instagram.com/{username}/saved/all-posts/"
+                    print(format_status("info", f"Saved index detected — navigating to {nav_url} ..."))
+                    session.evaluate(f"window.location.href = '{nav_url}'")
+                    time.sleep(5)
+                    current_url = nav_url
+                    print(format_status("info", f"Now on: {current_url}"))
+
             # 1. Initial page extraction
             html = session.evaluate(
                 "document.documentElement ? document.documentElement.outerHTML : document.body.innerHTML"

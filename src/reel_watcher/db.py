@@ -106,12 +106,38 @@ class Vault:
         with self._connection() as conn:
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS creators (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    handle TEXT NOT NULL,
+                    platform TEXT NOT NULL DEFAULT 'instagram',
+                    follower_count INTEGER DEFAULT 0,
+                    median_views INTEGER DEFAULT 0,
+                    mean_likes INTEGER DEFAULT 0,
+                    profile_url TEXT NOT NULL DEFAULT '',
+                    metadata_json TEXT DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(handle, platform)
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_creators_handle ON creators (handle);
+                """
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS queue (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     url TEXT NOT NULL,
                     shortcode TEXT NOT NULL UNIQUE,
                     collection TEXT DEFAULT '',
                     status TEXT DEFAULT 'pending',
+                    creator_id INTEGER DEFAULT NULL,
+                    views INTEGER DEFAULT NULL,
+                    likes INTEGER DEFAULT NULL,
+                    outlier_multiplier REAL DEFAULT NULL,
                     added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
@@ -140,6 +166,10 @@ class Vault:
                     summary TEXT DEFAULT '',
                     framework TEXT DEFAULT '',
                     score REAL DEFAULT 0.0,
+                    creator_id INTEGER DEFAULT NULL,
+                    views INTEGER DEFAULT NULL,
+                    likes INTEGER DEFAULT NULL,
+                    outlier_multiplier REAL DEFAULT NULL,
                     data_json TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -157,7 +187,141 @@ class Vault:
                 """
             )
 
-    def enqueue_url(self, url: str, collection: str = "") -> bool:
+            # Migrations for existing databases
+            for col, col_type in [
+                ("creator_id", "INTEGER"),
+                ("views", "INTEGER"),
+                ("likes", "INTEGER"),
+                ("outlier_multiplier", "REAL"),
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE queue ADD COLUMN {col} {col_type};")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    conn.execute(f"ALTER TABLE studies ADD COLUMN {col} {col_type};")
+                except sqlite3.OperationalError:
+                    pass
+
+    def upsert_creator(
+        self,
+        handle: str,
+        platform: str = "instagram",
+        follower_count: int = 0,
+        median_views: int = 0,
+        mean_likes: int = 0,
+        profile_url: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Insert or update a creator record and return their creator_id."""
+        clean_handle = handle.strip().lstrip("@").lower()
+        clean_platform = platform.strip().lower() or "instagram"
+        p_url = profile_url.strip() or f"https://www.instagram.com/{clean_handle}/"
+        meta_json = json.dumps(metadata or {}, ensure_ascii=False)
+
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO creators (
+                    handle, platform, follower_count, median_views, mean_likes, profile_url, metadata_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(handle, platform) DO UPDATE SET
+                    follower_count = excluded.follower_count,
+                    median_views = excluded.median_views,
+                    mean_likes = excluded.mean_likes,
+                    profile_url = excluded.profile_url,
+                    metadata_json = excluded.metadata_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (clean_handle, clean_platform, follower_count, median_views, mean_likes, p_url, meta_json),
+            )
+            cursor.execute(
+                "SELECT id FROM creators WHERE handle = ? AND platform = ?",
+                (clean_handle, clean_platform),
+            )
+            row = cursor.fetchone()
+            return int(row["id"]) if row else cursor.lastrowid
+
+    def get_creator(self, handle: str, platform: str = "instagram") -> dict[str, Any] | None:
+        """Get creator metadata by handle and platform."""
+        clean_handle = handle.strip().lstrip("@").lower()
+        clean_platform = platform.strip().lower() or "instagram"
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, handle, platform, follower_count, median_views, mean_likes, profile_url, metadata_json, created_at, updated_at
+                FROM creators
+                WHERE handle = ? AND platform = ?
+                """,
+                (clean_handle, clean_platform),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            try:
+                res["metadata"] = json.loads(res.get("metadata_json") or "{}")
+            except Exception:
+                res["metadata"] = {}
+            return res
+
+    def list_creators(self, limit: int = 100) -> list[dict[str, Any]]:
+        """List creators sorted by median views descending."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT id, handle, platform, follower_count, median_views, mean_likes, profile_url, metadata_json, created_at, updated_at
+                FROM creators
+                ORDER BY median_views DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                item = dict(r)
+                try:
+                    item["metadata"] = json.loads(item.get("metadata_json") or "{}")
+                except Exception:
+                    item["metadata"] = {}
+                results.append(item)
+            return results
+
+    def get_studies_by_creator(self, creator_id: int) -> list[dict[str, Any]]:
+        """Retrieve all completed studies associated with a specific creator."""
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT data_json FROM studies
+                WHERE creator_id = ?
+                ORDER BY views DESC, updated_at DESC
+                """,
+                (creator_id,),
+            )
+            rows = cursor.fetchall()
+            results = []
+            for r in rows:
+                try:
+                    results.append(json.loads(r["data_json"]))
+                except Exception:
+                    continue
+            return results
+
+    def enqueue_url(
+        self,
+        url: str,
+        collection: str = "",
+        creator_id: int | None = None,
+        views: int | None = None,
+        likes: int | None = None,
+        outlier_multiplier: float | None = None,
+    ) -> bool:
         """Enqueue a reel URL deduplicated by its extracted shortcode.
 
         Returns True if inserted into the queue, or False if already queued or studied.
@@ -178,10 +342,20 @@ class Vault:
 
             cursor.execute(
                 """
-                INSERT INTO queue (url, shortcode, collection, status, added_at, updated_at)
-                VALUES (?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO queue (
+                    url, shortcode, collection, status, creator_id, views, likes, outlier_multiplier, added_at, updated_at
+                )
+                VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 """,
-                (url.strip(), shortcode, collection.strip()),
+                (
+                    url.strip(),
+                    shortcode,
+                    collection.strip(),
+                    creator_id,
+                    views,
+                    likes,
+                    outlier_multiplier,
+                ),
             )
             return True
 
@@ -191,7 +365,7 @@ class Vault:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, url, shortcode, collection, status, added_at, updated_at
+                SELECT id, url, shortcode, collection, status, creator_id, views, likes, outlier_multiplier, added_at, updated_at
                 FROM queue
                 WHERE status = 'pending'
                 ORDER BY id ASC
@@ -222,7 +396,7 @@ class Vault:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, url, shortcode, collection, status, added_at, updated_at
+                SELECT id, url, shortcode, collection, status, creator_id, views, likes, outlier_multiplier, added_at, updated_at
                 FROM queue
                 WHERE shortcode = ?
                 """,
@@ -250,6 +424,11 @@ class Vault:
         hook_text = str(normalized.get("hook_text", ""))
         summary = str(normalized.get("summary", ""))
         framework = str(normalized.get("framework", ""))
+        creator_id = normalized.get("creator_id")
+        views = normalized.get("views")
+        likes = normalized.get("likes")
+        outlier_multiplier = normalized.get("outlier_multiplier")
+
         raw_score = normalized.get("score", 0.0)
         try:
             score = float(raw_score) if raw_score is not None else 0.0
@@ -266,9 +445,9 @@ class Vault:
             cursor.execute(
                 """
                 INSERT INTO studies (
-                    shortcode, url, collection, title, author, hook_text, summary, framework, score, data_json, updated_at
+                    shortcode, url, collection, title, author, hook_text, summary, framework, score, creator_id, views, likes, outlier_multiplier, data_json, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(shortcode) DO UPDATE SET
                     url = excluded.url,
                     collection = excluded.collection,
@@ -278,10 +457,29 @@ class Vault:
                     summary = excluded.summary,
                     framework = excluded.framework,
                     score = excluded.score,
+                    creator_id = excluded.creator_id,
+                    views = excluded.views,
+                    likes = excluded.likes,
+                    outlier_multiplier = excluded.outlier_multiplier,
                     data_json = excluded.data_json,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (code, url, collection, title, author, hook_text, summary, framework, score, json_blob),
+                (
+                    code,
+                    url,
+                    collection,
+                    title,
+                    author,
+                    hook_text,
+                    summary,
+                    framework,
+                    score,
+                    creator_id,
+                    views,
+                    likes,
+                    outlier_multiplier,
+                    json_blob,
+                ),
             )
             cursor.execute(
                 """
@@ -305,6 +503,9 @@ class Vault:
             self.index_file.parent.mkdir(parents=True, exist_ok=True)
         with open(self.index_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(normalized, ensure_ascii=False) + "\n")
+
+    # Alias record_study to save_study for compatibility
+    record_study = save_study
 
     def get_study(self, code: str) -> dict[str, Any] | None:
         """Retrieve a study by its shortcode from DB, with fallback to filesystem."""

@@ -362,3 +362,47 @@ def test_vision_client_ollama_api_call(dummy_image_path: Path) -> None:
         assert call_json["model"] == "llama3.2-vision"
         assert "images" in call_json["messages"][0]
         assert res["hook"]["text"] == "Local Vision Hook"
+
+
+# ==============================================================================
+# 9. Automatic Quota Failover Tests
+# ==============================================================================
+
+
+def test_vision_client_gemini_to_openrouter_quota_failover(dummy_image_path: Path) -> None:
+    """Verify that when Gemini hits a 429 quota error, VisionClient automatically fails over to OpenRouter."""
+    gemini_429 = MagicMock()
+    gemini_429.status_code = 429
+    gemini_429.text = "RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'Generate Content API requests'"
+
+    openrouter_200 = MagicMock()
+    openrouter_200.status_code = 200
+    openrouter_200.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    "content": json.dumps({
+                        "hook": {"text": "Failover Hook via OpenRouter"},
+                        "score": 9.1,
+                    })
+                }
+            }
+        ]
+    }
+
+    # First call (Gemini) returns 429, second call (OpenRouter) returns 200
+    with patch("httpx.Client.post", side_effect=[gemini_429, openrouter_200]) as mock_post:
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test_openrouter_failover_key"}):
+            client = VisionClient(
+                provider="gemini",
+                api_key="test_gemini_key",
+            )
+            res = client.ask_contact_sheet(dummy_image_path)
+
+            assert mock_post.call_count == 2
+            # First call was Gemini
+            assert "googleapis.com" in mock_post.call_args_list[0][0][0]
+            # Second call was OpenRouter
+            assert "openrouter.ai" in mock_post.call_args_list[1][0][0]
+            assert res["hook"]["text"] == "Failover Hook via OpenRouter"
+            assert res["score"] == 9.1

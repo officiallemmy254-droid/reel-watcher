@@ -18,8 +18,11 @@ from reel_watcher.browser_sync import harvest_saved_reels_via_cdp
 from reel_watcher.config import Config, format_status, load_config
 from reel_watcher.db import Vault, extract_shortcode
 from reel_watcher.downloader import download_media
+from reel_watcher.creator import filter_outliers, harvest_creator
+from reel_watcher.dossier import export_dossier
 from reel_watcher.ig_export import export_to_tsv, extract_urls_from_export
 from reel_watcher.media import preflight
+from reel_watcher.saved_processor import ingest_local_folder, sync_saved_collection
 from reel_watcher.study import analyze_carousel_study, analyze_video_study
 from reel_watcher.vision import VisionClient
 
@@ -115,21 +118,20 @@ def cmd_harvest(args: argparse.Namespace) -> int:
 
     print(format_status("info", f"Harvesting saved reels from Chrome CDP session at {cdp_url}..."))
     try:
-        shortcodes = harvest_saved_reels_via_cdp(cdp_url=cdp_url, collection=collection)
+        results = harvest_saved_reels_via_cdp(cdp_base=cdp_url, target_collection=collection, vault=vault)
     except Exception as err:
         print(format_status("error", f"Chrome CDP harvest failed: {err}"))
         return 1
 
     enqueued_count = 0
-    for code in shortcodes:
-        raw_url = f"https://www.instagram.com/reel/{code}/"
-        if vault.enqueue_url(raw_url, collection=collection):
+    for item in results:
+        code = item.get("code") if isinstance(item, dict) else str(item)
+        url = item.get("url") if isinstance(item, dict) else f"https://www.instagram.com/reel/{code}/"
+        if vault.enqueue_url(url, collection=collection):
             enqueued_count += 1
-            print(format_status("success", f"Harvested and enqueued: {code}"))
-        else:
-            print(format_status("info", f"Already in vault: {code}"))
+        print(format_status("success", f"Harvested reel: {code}"))
 
-    print(format_status("success", f"Harvester finished. {enqueued_count} new reel(s) enqueued."))
+    print(format_status("success", f"Harvester finished. {len(results)} reel(s) harvested."))
     return 0
 
 
@@ -175,11 +177,12 @@ def cmd_download(args: argparse.Namespace) -> int:
         try:
             downloaded = download_media(
                 args.url,
-                out_dir=out_dir,
+                dest_dir=out_dir,
                 browser=browser,
                 use_cookies=use_cookies,
             )
-            print(format_status("success", f"Downloaded media to {downloaded}"))
+            v_path = downloaded.get("video_path") if isinstance(downloaded, dict) else downloaded
+            print(format_status("success", f"Downloaded media to {v_path}"))
             return 0
         except Exception as err:
             print(format_status("error", f"Download failed: {err}"))
@@ -202,13 +205,14 @@ def cmd_download(args: argparse.Namespace) -> int:
             try:
                 dest = download_media(
                     url,
-                    out_dir=out_dir,
+                    dest_dir=out_dir,
                     browser=browser,
                     use_cookies=use_cookies,
                 )
                 vault.update_queue_status(code, "downloaded")
                 success_count += 1
-                print(format_status("success", f"Downloaded [{code}] -> {dest.name}"))
+                v_path = dest.get("video_path") if isinstance(dest, dict) else dest
+                print(format_status("success", f"Downloaded [{code}] -> {getattr(v_path, 'name', v_path)}"))
             except Exception as err:
                 vault.update_queue_status(code, "failed")
                 print(format_status("error", f"Failed downloading [{code}]: {err}"))
@@ -331,6 +335,122 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_creator(args: argparse.Namespace) -> int:
+    """Handle creator commands: scan, harvest, dossier."""
+    action = getattr(args, "creator_action", None)
+    if not action:
+        print(format_status("error", "Specify creator action: 'scan', 'harvest', or 'dossier'."))
+        return 1
+
+    config = load_config()
+    vault = _get_vault(args, config)
+    handle = args.handle.strip().lstrip("@")
+    platform = getattr(args, "platform", "instagram") or "instagram"
+
+    if action == "scan":
+        limit = getattr(args, "limit", 50)
+        thresh = getattr(args, "outlier_threshold", 1.5)
+        print(format_status("info", f"Scanning @{handle} on {platform.title()} (max {limit} posts)..."))
+        posts, stats = harvest_creator(handle=handle, platform=platform, max_posts=limit, outlier_threshold=thresh)
+        vault.upsert_creator(
+            handle=stats.handle,
+            platform=stats.platform,
+            median_views=stats.median_views,
+            mean_likes=stats.mean_likes,
+        )
+        print(format_status("success", f"Creator @{stats.handle} ({stats.platform.title()}):"))
+        print(f"  Total Posts Scanned: {stats.total_posts}")
+        print(f"  Median Views: {stats.median_views:,}")
+        print(f"  Mean Likes: {stats.mean_likes:,}")
+        print(f"  Outliers Flagged (>{thresh}x median): {len(stats.top_outliers)}")
+        for o in stats.top_outliers[:10]:
+            print(f"    [{o.outlier_multiplier}x] {o.shortcode} - {o.views:,} views | {o.caption[:60]}...")
+        return 0
+
+    elif action == "harvest":
+        limit = getattr(args, "limit", 50)
+        thresh = getattr(args, "min_multiplier", 1.5)
+        top_n = getattr(args, "top", 10)
+        print(format_status("info", f"Harvesting outliers for @{handle} on {platform.title()}..."))
+        posts, stats = harvest_creator(handle=handle, platform=platform, max_posts=limit, outlier_threshold=thresh)
+        cid = vault.upsert_creator(
+            handle=stats.handle,
+            platform=stats.platform,
+            median_views=stats.median_views,
+            mean_likes=stats.mean_likes,
+        )
+        outliers = filter_outliers(posts, stats=stats, min_multiplier=thresh, top_n=top_n)
+        enqueued_count = 0
+        for o in outliers:
+            if vault.enqueue_url(
+                url=o.url,
+                collection=f"creator:{handle}",
+                creator_id=cid,
+                views=o.views,
+                likes=o.likes,
+                outlier_multiplier=o.outlier_multiplier,
+            ):
+                enqueued_count += 1
+                print(format_status("success", f"Enqueued outlier [{o.shortcode}] ({o.outlier_multiplier}x median, {o.views:,} views)"))
+
+        print(format_status("success", f"Harvested {len(outliers)} outlier(s) for @{handle} ({enqueued_count} new enqueued)."))
+        return 0
+
+    elif action == "dossier":
+        out_dir = getattr(args, "out_dir", None)
+        print(format_status("info", f"Synthesizing competitive intelligence dossier for @{handle}..."))
+        md_path = export_dossier(handle=handle, vault=vault, out_dir=out_dir, platform=platform)
+        print(format_status("success", f"Generated Creator Dossier for @{handle}: {md_path.name}"))
+        return 0
+
+    print(format_status("error", f"Unknown creator action: {action}"))
+    return 1
+
+
+def cmd_sync_saved(args: argparse.Namespace) -> int:
+    """Sync saved collection via live Chrome CDP."""
+    config = load_config()
+    vault = _get_vault(args, config)
+    collection = getattr(args, "collection", "all-posts") or "all-posts"
+    max_scrolls = getattr(args, "max_scrolls", 5)
+    auto_download = not getattr(args, "no_download", False)
+    auto_study = getattr(args, "auto_study", False)
+    cdp_url = getattr(args, "cdp_url", None) or config.cdp_url
+
+    summary = sync_saved_collection(
+        collection=collection,
+        max_scrolls=max_scrolls,
+        auto_download=auto_download,
+        auto_study=auto_study,
+        vault=vault,
+        cdp_base=cdp_url,
+    )
+    print(format_status("success", f"Sync complete for '{collection}': {summary['harvested']} harvested, {summary['downloaded']} downloaded, {summary['studied']} studied, {summary['unavailable']} unavailable."))
+    return 0
+
+
+def cmd_ingest_folder(args: argparse.Namespace) -> int:
+    """Ingest local video folder into Vault."""
+    config = load_config()
+    vault = _get_vault(args, config)
+    folder_path = Path(args.path)
+    collection = getattr(args, "collection", "local_ingest") or "local_ingest"
+    recursive = getattr(args, "recursive", False)
+    auto_study = getattr(args, "auto_study", False)
+    fast = getattr(args, "fast", False)
+
+    results = ingest_local_folder(
+        folder_path=folder_path,
+        collection=collection,
+        recursive=recursive,
+        auto_study=auto_study,
+        vault=vault,
+        fast=fast,
+    )
+    print(format_status("success", f"Ingested {len(results)} local video(s) into collection '{collection}'."))
+    return 0
+
+
 # ==============================================================================
 # Argument Parser Construction
 # ==============================================================================
@@ -429,6 +549,63 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--db", help="Path to SQLite database.")
     p_serve.add_argument("--out-root", help="Path to vault output root directory.")
     p_serve.set_defaults(func=cmd_serve)
+
+    # 10. creator
+    p_creator = subparsers.add_parser("creator", help="Creator profile scanning, outlier harvesting, and dossier synthesis.")
+    c_sub = p_creator.add_subparsers(dest="creator_action", help="Creator action ('scan', 'harvest', 'dossier')")
+
+    # creator scan
+    p_c_scan = c_sub.add_parser("scan", help="Scan creator profile and compute baselines and outliers.")
+    p_c_scan.add_argument("handle", help="Creator handle or username.")
+    p_c_scan.add_argument("--platform", default="instagram", help="Platform ('instagram', 'tiktok', 'youtube_shorts').")
+    p_c_scan.add_argument("--limit", type=int, default=50, help="Max posts to scan.")
+    p_c_scan.add_argument("--outlier-threshold", type=float, default=1.5, help="Multiplier threshold over median views.")
+    p_c_scan.add_argument("--db", help="Path to SQLite database.")
+    p_c_scan.add_argument("--out-root", help="Path to vault output root directory.")
+    p_c_scan.set_defaults(func=cmd_creator)
+
+    # creator harvest
+    p_c_harvest = c_sub.add_parser("harvest", help="Harvest and enqueue top outlier reels for a creator.")
+    p_c_harvest.add_argument("handle", help="Creator handle or username.")
+    p_c_harvest.add_argument("--platform", default="instagram", help="Platform ('instagram', 'tiktok', 'youtube_shorts').")
+    p_c_harvest.add_argument("--limit", type=int, default=50, help="Max posts to scan.")
+    p_c_harvest.add_argument("--min-multiplier", type=float, default=1.5, help="Minimum outlier multiplier.")
+    p_c_harvest.add_argument("--top", type=int, default=10, help="Top N outliers to enqueue.")
+    p_c_harvest.add_argument("--auto-study", action="store_true", help="Automatically analyze downloaded media.")
+    p_c_harvest.add_argument("--db", help="Path to SQLite database.")
+    p_c_harvest.add_argument("--out-root", help="Path to vault output root directory.")
+    p_c_harvest.set_defaults(func=cmd_creator)
+
+    # creator dossier
+    p_c_dossier = c_sub.add_parser("dossier", help="Synthesize competitive intelligence dossier for a creator.")
+    p_c_dossier.add_argument("handle", help="Creator handle or username.")
+    p_c_dossier.add_argument("--platform", default="instagram", help="Platform ('instagram', 'tiktok', 'youtube_shorts').")
+    p_c_dossier.add_argument("--out-dir", help="Output directory for dossier report.")
+    p_c_dossier.add_argument("--db", help="Path to SQLite database.")
+    p_c_dossier.add_argument("--out-root", help="Path to vault output root directory.")
+    p_c_dossier.set_defaults(func=cmd_creator)
+
+    # 11. sync-saved
+    p_sync_saved = subparsers.add_parser("sync-saved", help="End-to-end sync of Instagram saved collections.")
+    p_sync_saved.add_argument("--collection", "-c", default="all-posts", help="Target collection name.")
+    p_sync_saved.add_argument("--max-scrolls", type=int, default=5, help="Max scroll passes.")
+    p_sync_saved.add_argument("--no-download", action="store_true", help="Only enqueue without downloading media.")
+    p_sync_saved.add_argument("--auto-study", action="store_true", help="Automatically analyze downloaded media.")
+    p_sync_saved.add_argument("--cdp-url", default="", help="Chrome CDP URL.")
+    p_sync_saved.add_argument("--db", help="Path to SQLite database.")
+    p_sync_saved.add_argument("--out-root", help="Path to vault output root directory.")
+    p_sync_saved.set_defaults(func=cmd_sync_saved)
+
+    # 12. ingest-folder
+    p_ingest = subparsers.add_parser("ingest-folder", help="Batch ingest local video files into Vault.")
+    p_ingest.add_argument("path", help="Directory path containing video files.")
+    p_ingest.add_argument("--collection", "-c", default="local_ingest", help="Collection tag.")
+    p_ingest.add_argument("--recursive", "-r", action="store_true", help="Recursively scan subdirectories.")
+    p_ingest.add_argument("--auto-study", action="store_true", help="Automatically analyze video files.")
+    p_ingest.add_argument("--fast", action="store_true", help="Use fast frame extraction.")
+    p_ingest.add_argument("--db", help="Path to SQLite database.")
+    p_ingest.add_argument("--out-root", help="Path to vault output root directory.")
+    p_ingest.set_defaults(func=cmd_ingest_folder)
 
     return parser
 

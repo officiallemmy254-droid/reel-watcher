@@ -228,6 +228,14 @@ class VisionClient:
             else:
                 self.api_key = None
 
+        # Resolve Secondary Keys for Automatic Quota Failover
+        self.gemini_api_key = (
+            self.api_key if self.provider == "gemini" and self.api_key else (cfg.gemini_api_key or os.environ.get("GEMINI_API_KEY"))
+        )
+        self.openrouter_api_key = (
+            self.api_key if self.provider == "openrouter" and self.api_key else (cfg.openrouter_api_key or os.environ.get("OPENROUTER_API_KEY"))
+        )
+
         # Resolve Model
         if model is not None and model != "":
             self.model = model.strip()
@@ -242,6 +250,14 @@ class VisionClient:
                 self.model = DEFAULT_OLLAMA_MODEL
             else:
                 self.model = "fake-model"
+
+        # Resolve Fallback Models
+        self.gemini_model = (
+            self.model if self.provider == "gemini" else (cfg.gemini_model or DEFAULT_GEMINI_MODEL)
+        )
+        self.openrouter_model = (
+            self.model if self.provider == "openrouter" else (cfg.openrouter_model or DEFAULT_OPENROUTER_MODEL)
+        )
 
     def ask_contact_sheet(
         self,
@@ -305,10 +321,43 @@ class VisionClient:
         # 4. Dispatch by provider
         print(format_status("progress", f"Submitting contact sheet to {self.provider} ({self.model})..."))
 
+        def _is_quota_error(exc: Exception) -> bool:
+            msg = str(exc).lower()
+            return any(k in msg for k in (
+                "429", "quota", "resourceexhausted", "rate limit", "rate_limit",
+                "credit", "exceeded", "too many requests", "insufficient_quota"
+            ))
+
         if self.provider == "gemini":
-            res = self._call_gemini(b64_img, mime_type, full_prompt)
+            try:
+                res = self._call_gemini(b64_img, mime_type, full_prompt)
+            except Exception as exc:
+                if _is_quota_error(exc) and self.openrouter_api_key:
+                    print(format_status("warning", f"Gemini quota/rate limit hit ({exc}). Automatically failing over to OpenRouter ({self.openrouter_model})..."))
+                    res = self._call_openrouter(
+                        b64_img,
+                        mime_type,
+                        full_prompt,
+                        api_key=self.openrouter_api_key,
+                        model=self.openrouter_model,
+                    )
+                else:
+                    raise
         elif self.provider == "openrouter":
-            res = self._call_openrouter(b64_img, mime_type, full_prompt)
+            try:
+                res = self._call_openrouter(b64_img, mime_type, full_prompt)
+            except Exception as exc:
+                if _is_quota_error(exc) and self.gemini_api_key:
+                    print(format_status("warning", f"OpenRouter quota/rate limit hit ({exc}). Automatically failing over to Gemini ({self.gemini_model})..."))
+                    res = self._call_gemini(
+                        b64_img,
+                        mime_type,
+                        full_prompt,
+                        api_key=self.gemini_api_key,
+                        model=self.gemini_model,
+                    )
+                else:
+                    raise
         elif self.provider == "openai":
             res = self._call_openai(b64_img, mime_type, full_prompt)
         elif self.provider == "ollama":
@@ -319,11 +368,20 @@ class VisionClient:
         print(format_status("success", f"Vision deconstruction completed via {self.provider} ({self.model})."))
         return res
 
-    def _call_gemini(self, b64_img: str, mime_type: str, prompt: str) -> dict[str, Any]:
+    def _call_gemini(
+        self,
+        b64_img: str,
+        mime_type: str,
+        prompt: str,
+        api_key: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         """Execute request to Google Gemini API."""
+        use_key = api_key or self.api_key
+        use_model = model or self.model
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent?key={self.api_key}"
+            f"{use_model}:generateContent?key={use_key}"
         )
         payload = {
             "contents": [
@@ -360,19 +418,28 @@ class VisionClient:
 
         return extract_json_from_text(text_resp)
 
-    def _call_openrouter(self, b64_img: str, mime_type: str, prompt: str) -> dict[str, Any]:
+    def _call_openrouter(
+        self,
+        b64_img: str,
+        mime_type: str,
+        prompt: str,
+        api_key: str | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
         """Execute request to OpenRouter multimodal completions API."""
+        use_key = api_key or self.api_key
+        use_model = model or self.model
         base = self.base_url or "https://openrouter.ai/api/v1"
         url = f"{base.rstrip('/')}/chat/completions"
 
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {use_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://github.com/gwelix/reel-watcher",
             "X-Title": "Reel-Watcher",
         }
         payload = {
-            "model": self.model,
+            "model": use_model,
             "messages": [
                 {
                     "role": "user",

@@ -447,14 +447,21 @@ def analyze_video_study(
         or ""
     )
 
-    context_prompt = (
-        f"Title: {title}\n"
-        f"Author: {author}\n"
-        f"Caption: {caption}\n"
-        f"Transcript: {audio_info.get('text', '')}\n"
-        f"Duration: {duration:.2f}s\n"
-        f"Scene Cuts: {len(cuts)}"
-    )
+    context_lines = [
+        f"Title: {title}",
+        f"Duration: {duration:.2f}s",
+        f"Scene Cuts: {len(cuts)}",
+    ]
+    if author and author not in ("unknown", "local_import"):
+        context_lines.append(f"Author: {author}")
+    if caption:
+        context_lines.append(f"Caption: {caption}")
+    else:
+        context_lines.append("Note: No social caption available. Deconstruct purely from visual contact sheet and audio transcript.")
+    if audio_info.get("text"):
+        context_lines.append(f"Transcript: {audio_info.get('text', '')}")
+
+    context_prompt = "\n".join(context_lines)
 
     vlm_result = vision.ask_contact_sheet(sheet_path, context_prompt=context_prompt)
 

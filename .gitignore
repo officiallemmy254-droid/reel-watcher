@@ -27,11 +27,18 @@ htmlcov/
 
 # Local Environment Variables & Secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
 
-# Database & Runtime Vault Media
+# Database, Runtime Vault Media & Local Caches
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
 *.sqlite3
 vault/
 downloads/
@@ -40,6 +47,17 @@ tmp/
 *.mp4
 *.mkv
 *.webm
+*.wav
+*.mp3
+*.info.json
+*.transcript.txt
+
+# Local run artifacts & scratch scripts
+advice.html
+download_software_reels.py
+read_metadata.py
+populate_studies.py
+.superpowers/
 
 # OS & IDE
 .DS_Store
@@ -47,3 +65,4 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+*.swo
