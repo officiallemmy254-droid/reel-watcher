@@ -89,18 +89,25 @@ def load_config(env_path: Path | None = None) -> Config:
     openrouter_model = get_val("OPENROUTER_MODEL", "google/gemini-2.5-pro") or "google/gemini-2.5-pro"
     gemini_model = get_val("GEMINI_MODEL", "gemini-2.5-flash") or "gemini-2.5-flash"
 
-    # Directory Paths - deterministically anchored to repository root
-    repo_root = Path(__file__).resolve().parent.parent.parent
-    canonical_vault = (repo_root / "vault") if (repo_root / "vault").is_dir() else (Path.cwd() / "vault")
-
+    # Directory Paths - canonical discovery anchored to repo root when outside
     vault_dir_raw = get_val("REEL_WATCHER_VAULT_DIR") or get_val("VAULT_DIR")
-    vault_dir = Path(vault_dir_raw).resolve() if vault_dir_raw else canonical_vault.resolve()
+    if vault_dir_raw:
+        vault_dir = Path(vault_dir_raw)
+    else:
+        repo_root = Path(__file__).resolve().parent.parent.parent
+        repo_vault = repo_root / "vault"
+        if Path.cwd().resolve() == repo_root.resolve():
+            vault_dir = Path("vault")
+        elif repo_vault.is_dir():
+            vault_dir = repo_vault
+        else:
+            vault_dir = Path("vault")
 
     downloads_dir_raw = get_val("REEL_WATCHER_DOWNLOADS_DIR") or get_val("DOWNLOADS_DIR")
-    downloads_dir = Path(downloads_dir_raw).resolve() if downloads_dir_raw else (vault_dir / "downloads")
+    downloads_dir = Path(downloads_dir_raw) if downloads_dir_raw else (vault_dir / "downloads")
 
     db_path_raw = get_val("REEL_WATCHER_DB_PATH") or get_val("DB_PATH")
-    db_path = Path(db_path_raw).resolve() if db_path_raw else (vault_dir / "reels.db")
+    db_path = Path(db_path_raw) if db_path_raw else (vault_dir / "reels.db")
 
     # CDP URL
     cdp_url = get_val("REEL_WATCHER_CDP_URL") or get_val("CDP_URL", "http://127.0.0.1:9222") or "http://127.0.0.1:9222"
