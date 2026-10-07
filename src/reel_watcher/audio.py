@@ -197,6 +197,21 @@ def _transcribe_with_backend(
     backend_key = backend.lower().strip().replace("_", "-")
 
     if backend_key == "faster-whisper":
+        try:
+            import av
+
+            if hasattr(av, "open") and not getattr(av, "_reel_watcher_patched", False):
+                _orig_av_open = av.open
+
+                def _patched_av_open(*args: Any, **kwargs: Any) -> Any:
+                    kwargs.pop("metadata_errors", None)
+                    return _orig_av_open(*args, **kwargs)
+
+                av.open = _patched_av_open  # type: ignore[assignment]
+                setattr(av, "_reel_watcher_patched", True)
+        except Exception:
+            pass
+
         from faster_whisper import WhisperModel
 
         model = WhisperModel(model_name, device="cpu", compute_type="int8")
