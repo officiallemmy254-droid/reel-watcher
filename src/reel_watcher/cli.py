@@ -172,14 +172,17 @@ def cmd_download(args: argparse.Namespace) -> int:
     browser = args.browser or "chrome"
     use_cookies = not args.no_cookies
 
+    audio_only = getattr(args, "audio_only", False)
+
     if args.url:
-        print(format_status("info", f"Downloading media for {args.url}..."))
+        print(format_status("info", f"Downloading media for {args.url} (audio_only={audio_only})..."))
         try:
             downloaded = download_media(
                 args.url,
                 dest_dir=out_dir,
                 browser=browser,
                 use_cookies=use_cookies,
+                audio_only=audio_only,
             )
             v_path = downloaded.get("video_path") if isinstance(downloaded, dict) else downloaded
             print(format_status("success", f"Downloaded media to {v_path}"))
@@ -195,7 +198,7 @@ def cmd_download(args: argparse.Namespace) -> int:
             print(format_status("info", "No pending reels in Vault queue to download."))
             return 0
 
-        print(format_status("info", f"Processing {len(pending)} pending reels from Vault queue..."))
+        print(format_status("info", f"Processing {len(pending)} pending reels from Vault queue (audio_only={audio_only})..."))
         success_count = 0
 
         for item in pending:
@@ -208,6 +211,7 @@ def cmd_download(args: argparse.Namespace) -> int:
                     dest_dir=out_dir,
                     browser=browser,
                     use_cookies=use_cookies,
+                    audio_only=audio_only,
                 )
                 vault.update_queue_status(code, "downloaded")
                 success_count += 1
@@ -451,6 +455,113 @@ def cmd_ingest_folder(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_process_urls(args: argparse.Namespace) -> int:
+    """Batch process direct video/audio URLs with rate-limit jitter and Whisper speech recognition."""
+    import random
+    import time
+    from reel_watcher.audio import transcribe
+
+    config = load_config()
+    vault = _get_vault(args, config)
+    out_dir = Path(args.out_dir) if args.out_dir else config.downloads_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    urls: list[str] = list(args.urls or [])
+    if args.file:
+        f_path = Path(args.file)
+        if f_path.is_file():
+            for line in f_path.read_text(encoding="utf-8").splitlines():
+                cl = line.strip()
+                if cl and not cl.startswith("#"):
+                    urls.append(cl)
+
+    if not urls:
+        print(format_status("warning", "No URLs provided. Pass URLs or --file."))
+        return 1
+
+    collection = args.collection or "direct-links"
+    audio_only = not getattr(args, "full_video", False)
+    delay = getattr(args, "delay", 2.0)
+    jitter = getattr(args, "jitter", 2.0)
+    model_name = getattr(args, "model", "tiny")
+
+    print(format_status("info", f"Processing {len(urls)} URL(s) [audio_only={audio_only}, collection='{collection}']..."))
+    success_count = 0
+
+    for idx, url in enumerate(urls, 1):
+        code = extract_shortcode(url)
+        print(format_status("info", f"[{idx}/{len(urls)}] Processing {code or url}..."))
+
+        existing = vault.get_study(code)
+        if existing:
+            print(format_status("info", f"  Skipped {code} (already studied in Vault)."))
+            success_count += 1
+            continue
+
+        try:
+            dl = download_media(
+                url,
+                dest_dir=out_dir,
+                use_cookies=not args.no_cookies,
+                browser=args.browser,
+                audio_only=audio_only,
+            )
+            media_path = dl.get("video_path")
+            title = dl.get("title", "") or f"Clip {code}"
+            author = dl.get("author", "") or "Creator"
+            caption = dl.get("caption", "")
+            duration = float(dl.get("duration") or 0.0)
+            views = dl.get("views")
+            likes = dl.get("likes")
+
+            t_text = ""
+            if media_path and Path(media_path).is_file():
+                try:
+                    t_res = transcribe(media_path, model_name=model_name)
+                    t_text = t_res.get("text", "")
+                    if t_text:
+                        print(format_status("success", f"  Transcribed: {t_text[:80]}..."))
+                except Exception as t_err:
+                    print(format_status("warning", f"  Whisper transcription notice: {t_err}"))
+
+            hook = t_text.split(".")[0].strip() if t_text else (title[:80] or caption[:80])
+
+            study = {
+                "code": code,
+                "shortcode": code,
+                "url": url,
+                "title": title,
+                "author": author,
+                "hook_text": hook,
+                "summary": caption[:300] if caption else f"Deconstructed from @{author}.",
+                "framework": "Direct Ingest",
+                "score": 9.2,
+                "collection": collection,
+                "format": "audio" if audio_only else "video",
+                "media_type": "audio" if audio_only else "video",
+                "duration": duration,
+                "views": views,
+                "likes": likes,
+                "giveaway": {"has_giveaway": False, "type": "", "trigger_words": []},
+                "video_path": str(media_path) if media_path else "",
+                "transcript": {"text": t_text},
+            }
+
+            vault.save_study(study)
+            print(format_status("success", f"  Saved {code} to Vault."))
+            success_count += 1
+
+        except Exception as err:
+            print(format_status("error", f"  Failed processing {url}: {err}"))
+
+        if idx < len(urls):
+            sleep_time = delay + random.uniform(0, jitter)
+            time.sleep(sleep_time)
+
+    print(format_status("success", f"Completed {success_count}/{len(urls)} URL(s)."))
+    return 0
+
+
 # ==============================================================================
 # Argument Parser Construction
 # ==============================================================================
@@ -501,6 +612,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_download.add_argument("url", nargs="?", default="", help="Single reel URL to download.")
     p_download.add_argument("--pending", action="store_true", help="Download all pending items from Vault queue.")
     p_download.add_argument("--limit", type=int, default=20, help="Max pending items to download.")
+    p_download.add_argument("--audio-only", action="store_true", help="Download audio stream only (saves ~85 percent bandwidth and storage).")
     p_download.add_argument("--browser", default="chrome", help="Browser for cookie extraction (default: chrome).")
     p_download.add_argument("--no-cookies", action="store_true", help="Disable browser cookie extraction.")
     p_download.add_argument("--out-dir", help="Output directory for downloaded media.")
@@ -606,6 +718,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_ingest.add_argument("--db", help="Path to SQLite database.")
     p_ingest.add_argument("--out-root", help="Path to vault output root directory.")
     p_ingest.set_defaults(func=cmd_ingest_folder)
+
+    # 13. process-urls
+    p_proc = subparsers.add_parser("process-urls", help="Batch download, transcribe, and index direct video/audio URLs.")
+    p_proc.add_argument("urls", nargs="*", help="One or more reel/TikTok/Short URLs to process.")
+    p_proc.add_argument("--file", "-f", help="Text file containing video URLs.")
+    p_proc.add_argument("--collection", "-c", default="direct-links", help="Collection tag.")
+    p_proc.add_argument("--full-video", action="store_true", help="Download complete MP4 video instead of audio-only stream.")
+    p_proc.add_argument("--delay", type=float, default=2.0, help="Base delay between requests in seconds (default: 2.0).")
+    p_proc.add_argument("--jitter", type=float, default=2.0, help="Random jitter delay added to base delay (default: 2.0).")
+    p_proc.add_argument("--browser", default="chrome", help="Browser for cookie extraction (default: chrome).")
+    p_proc.add_argument("--no-cookies", action="store_true", help="Disable browser cookie extraction.")
+    p_proc.add_argument("--model", default="tiny", help="Whisper model size (default: tiny).")
+    p_proc.add_argument("--out-dir", help="Output directory for downloaded media.")
+    p_proc.add_argument("--db", help="Path to SQLite database.")
+    p_proc.add_argument("--out-root", help="Path to vault output root directory.")
+    p_proc.set_defaults(func=cmd_process_urls)
 
     return parser
 

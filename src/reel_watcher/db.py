@@ -203,6 +203,50 @@ class Vault:
                 except sqlite3.OperationalError:
                     pass
 
+            # FTS5 Virtual Table for Instant Topic & Semantic Full-Text Search
+            try:
+                conn.execute(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS studies_fts USING fts5(
+                        shortcode,
+                        title,
+                        author,
+                        hook_text,
+                        summary,
+                        framework,
+                        transcript
+                    );
+                    """
+                )
+                # Auto-backfill FTS table if empty
+                cur = conn.cursor()
+                cur.execute("SELECT count(*) FROM studies_fts")
+                if cur.fetchone()[0] == 0:
+                    cur.execute("SELECT shortcode, title, author, hook_text, summary, framework, data_json FROM studies")
+                    for row in cur.fetchall():
+                        try:
+                            dj = json.loads(row["data_json"])
+                            t_text = str(dj.get("transcript", {}).get("text", "") or dj.get("caption", ""))
+                        except Exception:
+                            t_text = ""
+                        cur.execute(
+                            """
+                            INSERT INTO studies_fts (shortcode, title, author, hook_text, summary, framework, transcript)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                row["shortcode"],
+                                row["title"] or "",
+                                row["author"] or "",
+                                row["hook_text"] or "",
+                                row["summary"] or "",
+                                row["framework"] or "",
+                                t_text,
+                            ),
+                        )
+            except Exception:
+                pass
+
     def upsert_creator(
         self,
         handle: str,
@@ -490,6 +534,20 @@ class Vault:
                 (code,),
             )
 
+            # Sync into studies_fts
+            try:
+                transcript_text = str(normalized.get("transcript", {}).get("text", "") or normalized.get("caption", ""))
+                cursor.execute("DELETE FROM studies_fts WHERE shortcode = ?", (code,))
+                cursor.execute(
+                    """
+                    INSERT INTO studies_fts (shortcode, title, author, hook_text, summary, framework, transcript)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (code, title, author, hook_text, summary, framework, transcript_text),
+                )
+            except Exception:
+                pass
+
         # 2. File persistence: study/<code>.json
         self.study_dir.mkdir(parents=True, exist_ok=True)
         file_path = self.study_dir / f"{code}.json"
@@ -534,23 +592,49 @@ class Vault:
         with self._connection() as conn:
             cursor = conn.cursor()
             if query.strip():
-                param = f"%{query.strip()}%"
-                cursor.execute(
-                    """
-                    SELECT data_json FROM studies
-                    WHERE shortcode LIKE ?
-                       OR title LIKE ?
-                       OR author LIKE ?
-                       OR hook_text LIKE ?
-                       OR summary LIKE ?
-                       OR framework LIKE ?
-                       OR collection LIKE ?
-                       OR data_json LIKE ?
-                    ORDER BY updated_at DESC, id DESC
-                    LIMIT ?
-                    """,
-                    (param, param, param, param, param, param, param, param, limit),
-                )
+                clean_q = query.strip()
+                fts_rows = []
+                try:
+                    # Prepare FTS query: exact phrase or token prefix search
+                    tokens = [re.sub(r"[^\w]", "", t) for t in clean_q.split() if re.sub(r"[^\w]", "", t)]
+                    if tokens:
+                        fts_expr = " OR ".join(f'"{t}"*' for t in tokens)
+                        cursor.execute(
+                            """
+                            SELECT s.data_json
+                            FROM studies s
+                            JOIN studies_fts ON s.shortcode = studies_fts.shortcode
+                            WHERE studies_fts MATCH ?
+                            ORDER BY bm25(studies_fts) ASC, s.score DESC
+                            LIMIT ?
+                            """,
+                            (fts_expr, limit),
+                        )
+                        fts_rows = cursor.fetchall()
+                except Exception:
+                    fts_rows = []
+
+                if fts_rows:
+                    rows = fts_rows
+                else:
+                    param = f"%{clean_q}%"
+                    cursor.execute(
+                        """
+                        SELECT data_json FROM studies
+                        WHERE shortcode LIKE ?
+                           OR title LIKE ?
+                           OR author LIKE ?
+                           OR hook_text LIKE ?
+                           OR summary LIKE ?
+                           OR framework LIKE ?
+                           OR collection LIKE ?
+                           OR data_json LIKE ?
+                        ORDER BY updated_at DESC, id DESC
+                        LIMIT ?
+                        """,
+                        (param, param, param, param, param, param, param, param, limit),
+                    )
+                    rows = cursor.fetchall()
             else:
                 cursor.execute(
                     """
@@ -560,8 +644,8 @@ class Vault:
                     """,
                     (limit,),
                 )
+                rows = cursor.fetchall()
 
-            rows = cursor.fetchall()
             results: list[dict[str, Any]] = []
             for row in rows:
                 try:

@@ -18,6 +18,8 @@ from reel_watcher.db import extract_shortcode
 from reel_watcher.media import id_from_url, probe
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".m4v", ".avi"}
+AUDIO_EXTENSIONS = {".m4a", ".mp3", ".aac", ".wav", ".opus", ".ogg"}
+MEDIA_EXTENSIONS = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 
 # Windows reserved device names
 WINDOWS_RESERVED_NAMES = {
@@ -64,16 +66,16 @@ def sanitize_filename(name: str, max_length: int = 128) -> str:
 
 
 def _find_video_file(dest_dir: Path, clean_id: str) -> Path | None:
-    """Locate downloaded video file matching clean_id in dest_dir."""
-    # Direct match: clean_id.mp4 or clean_id.<ext>
-    for ext in VIDEO_EXTENSIONS:
+    """Locate downloaded video or audio file matching clean_id in dest_dir."""
+    # Direct match: clean_id.<ext>
+    for ext in MEDIA_EXTENSIONS:
         candidate = dest_dir / f"{clean_id}{ext}"
         if candidate.exists() and candidate.is_file():
             return candidate
 
     # Prefix match
     for f in dest_dir.iterdir():
-        if f.is_file() and f.suffix.lower() in VIDEO_EXTENSIONS:
+        if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS:
             if f.name.startswith(clean_id):
                 return f
 
@@ -172,8 +174,9 @@ def download_media(
     browser: str = "chrome",
     apify_token: str | None = None,
     timeout: int = 180,
+    audio_only: bool = False,
 ) -> dict:
-    """Download video and extract rich metadata via yt-dlp with cookie bridge.
+    """Download video or audio-first stream and extract rich metadata via yt-dlp with cookie bridge.
 
     Supports automatic fallback if Chrome cookie database is locked, and optional
     secondary fallback to Apify actor if APIFY_TOKEN is supplied.
@@ -185,6 +188,7 @@ def download_media(
         browser: Browser identifier for cookie extraction (default: 'chrome').
         apify_token: Optional Apify API token for fallback.
         timeout: Subprocess execution timeout in seconds.
+        audio_only: If True, pulls audio-only stream (saving ~85% bandwidth & storage).
 
     Returns:
         dict: {
@@ -216,16 +220,27 @@ def download_media(
         cid = f"ig_{shortcode}" if shortcode else "reel_unknown"
     safe_stem = sanitize_filename(cid)
 
-    # Base yt-dlp execution arguments
-    base_cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "--no-warnings",
-        "--write-info-json",
-        "--merge-output-format", "mp4",
-        "-f", "bv*[height<=1080]+ba/b[height<=1080]/bv+ba/b",
-        "-o", str(dest / f"{safe_stem}.%(ext)s"),
-    ]
+    # Base yt-dlp execution arguments (audio-only or full video)
+    if audio_only:
+        base_cmd = [
+            "yt-dlp",
+            "--no-playlist",
+            "--no-warnings",
+            "--write-info-json",
+            "-x",
+            "--audio-format", "m4a",
+            "-o", str(dest / f"{safe_stem}.%(ext)s"),
+        ]
+    else:
+        base_cmd = [
+            "yt-dlp",
+            "--no-playlist",
+            "--no-warnings",
+            "--write-info-json",
+            "--merge-output-format", "mp4",
+            "-f", "bv*[height<=1080]+ba/b[height<=1080]/bv+ba/b",
+            "-o", str(dest / f"{safe_stem}.%(ext)s"),
+        ]
 
     last_error = ""
     success = False
