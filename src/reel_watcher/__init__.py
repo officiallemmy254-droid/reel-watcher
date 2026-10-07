@@ -47,6 +47,10 @@ from reel_watcher.study import (
     parse_comment_words,
     parse_giveaway,
 )
+from reel_watcher.longform import (
+    analyze_longform_study,
+    get_longform_metadata,
+)
 from reel_watcher.vision import (
     VisionClient,
     extract_json_from_text,
@@ -93,6 +97,8 @@ __all__ = [
     "parse_giveaway",
     "analyze_video_study",
     "analyze_carousel_study",
+    "analyze_longform_study",
+    "get_longform_metadata",
     "render_advice_html",
     "create_app",
     "run_server",

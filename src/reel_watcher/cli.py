@@ -22,6 +22,7 @@ from reel_watcher.creator import filter_outliers, harvest_creator
 from reel_watcher.dossier import export_dossier
 from reel_watcher.ig_export import export_to_tsv, extract_urls_from_export
 from reel_watcher.media import preflight
+from reel_watcher.longform import analyze_longform_study
 from reel_watcher.saved_processor import ingest_local_folder, sync_saved_collection
 from reel_watcher.study import analyze_carousel_study, analyze_video_study
 from reel_watcher.vision import VisionClient
@@ -562,6 +563,49 @@ def cmd_process_urls(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_longform(args: argparse.Namespace) -> int:
+    """Analyze long-form YouTube video with chapter segmentation and strategic synthesis."""
+    import json
+    config = load_config()
+    vault = _get_vault(args, config)
+
+    provider = getattr(args, "provider", None) or "gemini"
+    model = getattr(args, "model", None)
+    api_key = getattr(args, "api_key", None)
+
+    vision = VisionClient(provider=provider, model=model, api_key=api_key)
+
+    work_dir = Path(args.work_dir) if getattr(args, "work_dir", None) else (vault.out_root / "work" / "longform")
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        study = analyze_longform_study(
+            url=args.url,
+            work_dir=work_dir,
+            vision=vision,
+            use_cookies=not getattr(args, "no_cookies", False),
+            browser=getattr(args, "browser", "chrome"),
+        )
+    except Exception as err:
+        print(format_status("error", f"Long-form analysis failed: {err}"))
+        return 1
+
+    # Save to vault & SQLite database
+    vault.save_study(study)
+
+    # Save markdown note
+    md_file = vault.study_dir / f"{study['shortcode']}_longform.md"
+    if "markdown" in study:
+        md_file.write_text(study["markdown"], encoding="utf-8")
+        print(format_status("success", f"Vault Markdown note created: {md_file.name}"))
+
+    if getattr(args, "json", False):
+        print(json.dumps(study, indent=2, ensure_ascii=False))
+
+    print(format_status("success", f"Long-form study completed and indexed for {study['shortcode']}."))
+    return 0
+
+
 # ==============================================================================
 # Argument Parser Construction
 # ==============================================================================
@@ -734,6 +778,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_proc.add_argument("--db", help="Path to SQLite database.")
     p_proc.add_argument("--out-root", help="Path to vault output root directory.")
     p_proc.set_defaults(func=cmd_process_urls)
+
+    # 14. longform
+    p_long = subparsers.add_parser("longform", help="Analyze long-form YouTube video with chapter segmentation and thesis deconstruction.")
+    p_long.add_argument("url", help="YouTube video URL.")
+    p_long.add_argument("--provider", default="gemini", help="Vision provider (gemini, openrouter, fake, etc.).")
+    p_long.add_argument("--model", default=None, help="Vision model override.")
+    p_long.add_argument("--api-key", default=None, help="API key override.")
+    p_long.add_argument("--browser", default="chrome", help="Browser for cookie extraction (default: chrome).")
+    p_long.add_argument("--no-cookies", action="store_true", help="Disable browser cookie extraction.")
+    p_long.add_argument("--work-dir", help="Directory for temporary media artifacts.")
+    p_long.add_argument("--json", action="store_true", help="Output raw study JSON to stdout.")
+    p_long.add_argument("--db", help="Path to SQLite database.")
+    p_long.add_argument("--out-root", help="Path to vault output root directory.")
+    p_long.set_defaults(func=cmd_longform)
 
     return parser
 
