@@ -57,6 +57,9 @@ advice.html
 download_software_reels.py
 read_metadata.py
 populate_studies.py
+inspect_tiktok.py
+process_tiktok_saved.py
+transcribe_and_register_tiktoks.py
 .superpowers/
 
 # OS & IDE
